@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       iproute2 net-tools iptables dnsutils \
       nfs-kernel-server nfs-common \
       rsync logrotate cron sysstat procps \
-      lvm2 selinux-utils policycoreutils \
+      lvm2 selinux-utils policycoreutils attr \
       nginx locales tzdata \
     && locale-gen en_US.UTF-8 \
     && apt-get clean \
