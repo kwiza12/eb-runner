@@ -9,12 +9,16 @@ TIMEOUT_MINUTES="${TIMEOUT_MINUTES:-55}"
 CHALLENGE_NAME="${CHALLENGE_NAME:?CHALLENGE_NAME is required}"
 
 CONTAINER_NAME="eb-${SESSION_ID:0:12}"
+K3S_NAME="k3s-${SESSION_ID:0:12}"
+NETWORK_NAME="ebnet-${SESSION_ID:0:12}"
 CONTAINER_USER="runner"
 TTYD_PORT=7681
 ARTIFACTS_DIR="/tmp/lab-artifacts"
 TTYD_PID=""
 TUNNEL_PID=""
+K3S_STARTED="false"
 LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
+K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.28.5-k3s1}"
 
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -54,12 +58,92 @@ cleanup() {
   log "Cleaning up..."
   docker cp "${CONTAINER_NAME}:/home/${CONTAINER_USER}/.bash_history" "${ARTIFACTS_DIR}/bash_history" 2>/dev/null || true
   docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+  if [ "$K3S_STARTED" = "true" ]; then
+    docker logs "$K3S_NAME" > "${ARTIFACTS_DIR}/k3s.log" 2>&1 || true
+    docker rm -f "$K3S_NAME" 2>/dev/null || true
+  fi
+  docker network rm "$NETWORK_NAME" 2>/dev/null || true
   [ -n "$TTYD_PID" ] && kill "$TTYD_PID" 2>/dev/null || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   callback "workflow-complete" "{\"session_id\":\"${SESSION_ID}\"}"
   log "Cleanup done."
 }
 trap cleanup EXIT
+
+# --- Detect if this challenge needs a k8s cluster ---
+# Triggered by k8s-* prefix or the standalone fix-crashlooping-pod challenge.
+needs_k3s() {
+  case "$CHALLENGE_NAME" in
+    k8s-*|fix-crashlooping-pod) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# --- start_k3s: brings up a k3s server in a sibling container on a dedicated network ---
+# Sets global KUBECONFIG_FILE on success.
+start_k3s() {
+  log "Creating docker network ${NETWORK_NAME}" >&2
+  docker network create "$NETWORK_NAME" >/dev/null
+
+  log "Starting k3s server (${K3S_IMAGE})..." >&2
+  docker run -d \
+    --name "$K3S_NAME" \
+    --hostname "$K3S_NAME" \
+    --network "$NETWORK_NAME" \
+    --privileged \
+    --tmpfs /run \
+    --tmpfs /var/run \
+    -e K3S_KUBECONFIG_MODE=644 \
+    "$K3S_IMAGE" \
+    server \
+      --disable=traefik \
+      --disable=servicelb \
+      --disable=metrics-server \
+      --disable=local-storage \
+      --disable-network-policy \
+      --disable-helm-controller \
+      --tls-san="$K3S_NAME" \
+    >/dev/null
+
+  K3S_STARTED="true"
+  log "Waiting for k3s kubeconfig to be written..." >&2
+  local ok="false"
+  for i in $(seq 1 60); do
+    if docker exec "$K3S_NAME" test -f /etc/rancher/k3s/k3s.yaml 2>/dev/null; then
+      ok="true"
+      break
+    fi
+    sleep 1
+  done
+  if [ "$ok" != "true" ]; then
+    log "ERROR: k3s kubeconfig never appeared" >&2
+    return 1
+  fi
+
+  # Extract kubeconfig and rewrite server URL to use the network hostname
+  KUBECONFIG_FILE="/tmp/kubeconfig-${SESSION_ID:0:12}"
+  docker exec "$K3S_NAME" cat /etc/rancher/k3s/k3s.yaml > "$KUBECONFIG_FILE"
+  sed -i "s|server: https://127.0.0.1:6443|server: https://${K3S_NAME}:6443|g" "$KUBECONFIG_FILE"
+  chmod 644 "$KUBECONFIG_FILE"
+  log "k3s kubeconfig at ${KUBECONFIG_FILE}" >&2
+}
+
+# --- wait_k3s_ready: polls until the node is Ready (called after lab container exists) ---
+wait_k3s_ready() {
+  log "Waiting for k3s node to become Ready..."
+  for i in $(seq 1 60); do
+    local status
+    status=$(docker exec "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" \
+      kubectl get nodes --no-headers 2>/dev/null | awk '{print $2}' | head -1 || true)
+    if [ "$status" = "Ready" ]; then
+      log "k3s node is Ready after ${i}s"
+      return 0
+    fi
+    sleep 1
+  done
+  log "WARN: k3s did not become Ready within 60s"
+  return 1
+}
 
 # --- apply_challenge: handles both apply and validate commands ---
 apply_challenge() {
@@ -200,19 +284,32 @@ apply_challenge() {
   log "Challenge applied."
 }
 
-# --- 1. Start Docker container ---
+# --- 1. Start k3s in background (if needed) ---
+KUBECONFIG_FILE=""
+if needs_k3s; then
+  log "Challenge requires Kubernetes, starting k3s..."
+  docker pull "$K3S_IMAGE" >/dev/null 2>&1 || log "WARN: k3s pull failed, trying cached"
+  start_k3s || log "WARN: k3s failed to start"
+fi
+
+# --- 2. Start lab container ---
 log "Pulling image: ${LAB_IMAGE}"
 docker pull "$LAB_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
 
 log "Starting container: ${CONTAINER_NAME}"
-docker run -d \
-  --name "$CONTAINER_NAME" \
-  --hostname "$CONTAINER_NAME" \
-  --memory=1g \
-  --cpus=1 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  "$LAB_IMAGE" \
-  sleep infinity
+LAB_RUN_ARGS=(
+  --name "$CONTAINER_NAME"
+  --hostname "$CONTAINER_NAME"
+  --memory=1g
+  --cpus=1
+  -v /var/run/docker.sock:/var/run/docker.sock
+)
+if needs_k3s; then
+  # Attach to the same network as k3s so `kubectl` can reach the server by hostname
+  LAB_RUN_ARGS+=(--network "$NETWORK_NAME")
+fi
+
+docker run -d "${LAB_RUN_ARGS[@]}" "$LAB_IMAGE" sleep infinity
 
 # Remap docker group GID to match host socket
 docker exec "$CONTAINER_NAME" bash -c "
@@ -222,7 +319,22 @@ docker exec "$CONTAINER_NAME" bash -c "
     groupmod -g \$SOCK_GID docker 2>/dev/null || true; \
   fi
 "
+
+# Inject kubeconfig into lab container if k3s is active
+if needs_k3s && [ -n "$KUBECONFIG_FILE" ] && [ -f "$KUBECONFIG_FILE" ]; then
+  log "Injecting kubeconfig into lab container..."
+  docker exec "$CONTAINER_NAME" mkdir -p "/home/${CONTAINER_USER}/.kube"
+  docker cp "$KUBECONFIG_FILE" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/.kube/config"
+  docker exec "$CONTAINER_NAME" chown -R "${CONTAINER_USER}:${CONTAINER_USER}" "/home/${CONTAINER_USER}/.kube"
+  docker exec "$CONTAINER_NAME" chmod 600 "/home/${CONTAINER_USER}/.kube/config"
+fi
+
 log "Container ready."
+
+# --- Wait for k3s to become Ready (so setup scripts using kubectl work) ---
+if needs_k3s; then
+  wait_k3s_ready || log "WARN: k3s not ready — kubectl commands may fail until node comes up"
+fi
 
 # --- 2. Start ttyd ---
 log "Starting ttyd on port ${TTYD_PORT}"
