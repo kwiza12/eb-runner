@@ -79,7 +79,7 @@ docker exec "$CONTAINER_NAME" bash -c "
   mkdir -p /etc/sudoers.d && \
   echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CONTAINER_USER} && \
   apt-get update -qq && \
-  apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq docker.io && \
+  apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq docker.io vim nano && \
   SOCK_GID=\$(stat -c '%g' /var/run/docker.sock) && \
   groupmod -g \$SOCK_GID docker 2>/dev/null || groupadd -g \$SOCK_GID docker 2>/dev/null || true && \
   usermod -aG docker ${CONTAINER_USER} && \
