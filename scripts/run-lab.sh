@@ -63,6 +63,10 @@ cleanup() {
 trap cleanup EXIT
 
 # --- 1. Start Docker container ---
+LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
+log "Pulling image: ${LAB_IMAGE}"
+docker pull "$LAB_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
+
 log "Starting container: ${CONTAINER_NAME}"
 docker run -d \
   --name "$CONTAINER_NAME" \
@@ -70,21 +74,16 @@ docker run -d \
   --memory=1g \
   --cpus=1 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ubuntu:24.04 \
+  "$LAB_IMAGE" \
   sleep infinity
 
-# Create runner user with sudo + docker access
+# Remap docker group GID to match host socket (everything else is pre-baked)
 docker exec "$CONTAINER_NAME" bash -c "
-  useradd -m -s /bin/bash ${CONTAINER_USER} && \
-  mkdir -p /etc/sudoers.d && \
-  echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CONTAINER_USER} && \
-  apt-get update -qq && \
-  apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq docker.io vim nano && \
   SOCK_GID=\$(stat -c '%g' /var/run/docker.sock) && \
-  groupmod -g \$SOCK_GID docker 2>/dev/null || groupadd -g \$SOCK_GID docker 2>/dev/null || true && \
-  usermod -aG docker ${CONTAINER_USER} && \
-  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/${CONTAINER_USER}/.bashrc && \
-  apt-get clean && rm -rf /var/lib/apt/lists/*
+  CURRENT_GID=\$(getent group docker | cut -d: -f3) && \
+  if [ \"\$SOCK_GID\" != \"\$CURRENT_GID\" ]; then \
+    groupmod -g \$SOCK_GID docker 2>/dev/null || true; \
+  fi
 "
 log "Container ready."
 
@@ -207,10 +206,23 @@ apply_challenge() {
   pre_install=$(echo "$challenge_json" | jq -r '.challenge.pre_install // [] | join(" ")')
   namespace=$(echo "$challenge_json" | jq -r '.challenge.namespace // ""')
 
-  # Install packages
+  # Install packages (image is pre-baked with all common tools; only install if something exotic is requested)
   if [ -n "$packages" ] && [ "$packages" != "null" ]; then
-    log "Installing packages: ${packages}"
-    docker exec "$CONTAINER_NAME" bash -c "apt-get update -qq && apt-get install -y -qq ${packages}" || true
+    # Check if any package is actually missing before running apt
+    local missing
+    missing=$(docker exec "$CONTAINER_NAME" bash -c "
+      MISS=''
+      for pkg in ${packages}; do
+        dpkg -s \"\$pkg\" >/dev/null 2>&1 || MISS=\"\$MISS \$pkg\"
+      done
+      echo \"\$MISS\"
+    " | xargs)
+    if [ -n "$missing" ]; then
+      log "Installing missing packages: ${missing}"
+      docker exec "$CONTAINER_NAME" bash -c "apt-get update -qq && apt-get install -y -qq ${missing}" || true
+    else
+      log "All packages pre-installed, skipping apt"
+    fi
   fi
 
   # Download and extract challenge files
