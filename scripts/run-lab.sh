@@ -122,17 +122,16 @@ log "Tunnel URL: ${TUNNEL_URL}"
 log "Waiting for tunnel DNS to propagate..."
 TUNNEL_READY=false
 for i in $(seq 1 30); do
-  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "${TUNNEL_URL}/" 2>/dev/null || echo "000")
-  if [ "$HTTP_CODE" != "000" ]; then
+  if curl -sf --max-time 5 "${TUNNEL_URL}/" > /dev/null 2>&1; then
     TUNNEL_READY=true
-    log "Tunnel is accessible (HTTP ${HTTP_CODE})"
+    log "Tunnel is accessible after ${i} attempts"
     break
   fi
   sleep 2
 done
 
 if [ "$TUNNEL_READY" = "false" ]; then
-  log "WARN: Tunnel DNS not yet propagated, reporting anyway"
+  log "WARN: Tunnel may not be ready yet, reporting anyway"
 fi
 
 # --- 4. Report session ready ---
