@@ -14,6 +14,7 @@ TTYD_PORT=7681
 ARTIFACTS_DIR="/tmp/lab-artifacts"
 TTYD_PID=""
 TUNNEL_PID=""
+LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
 
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -51,104 +52,16 @@ heartbeat() {
 
 cleanup() {
   log "Cleaning up..."
-  # Save bash history as artifact
   docker cp "${CONTAINER_NAME}:/home/${CONTAINER_USER}/.bash_history" "${ARTIFACTS_DIR}/bash_history" 2>/dev/null || true
   docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
   [ -n "$TTYD_PID" ] && kill "$TTYD_PID" 2>/dev/null || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
-  # Report workflow complete
   callback "workflow-complete" "{\"session_id\":\"${SESSION_ID}\"}"
   log "Cleanup done."
 }
 trap cleanup EXIT
 
-# --- 1. Start Docker container ---
-LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
-log "Pulling image: ${LAB_IMAGE}"
-docker pull "$LAB_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
-
-log "Starting container: ${CONTAINER_NAME}"
-docker run -d \
-  --name "$CONTAINER_NAME" \
-  --hostname "$CONTAINER_NAME" \
-  --memory=1g \
-  --cpus=1 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  "$LAB_IMAGE" \
-  sleep infinity
-
-# Remap docker group GID to match host socket (everything else is pre-baked)
-docker exec "$CONTAINER_NAME" bash -c "
-  SOCK_GID=\$(stat -c '%g' /var/run/docker.sock) && \
-  CURRENT_GID=\$(getent group docker | cut -d: -f3) && \
-  if [ \"\$SOCK_GID\" != \"\$CURRENT_GID\" ]; then \
-    groupmod -g \$SOCK_GID docker 2>/dev/null || true; \
-  fi
-"
-log "Container ready."
-
-# --- 2. Start ttyd ---
-log "Starting ttyd on port ${TTYD_PORT}"
-THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#2196F3","cursorAccent":"#000000","selectionBackground":"#2196F333","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
-
-ttyd \
-  --port "$TTYD_PORT" \
-  --writable \
-  -t fontSize=17 \
-  -t reconnect=0 \
-  -t "theme=${THEME}" \
-  docker exec -it "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
-TTYD_PID=$!
-sleep 2
-
-if ! kill -0 "$TTYD_PID" 2>/dev/null; then
-  log "ERROR: ttyd failed to start"
-  exit 1
-fi
-log "ttyd running (PID: ${TTYD_PID})"
-
-# --- 3. Start cloudflared tunnel ---
-log "Starting cloudflared tunnel..."
-TUNNEL_LOG="/tmp/cloudflared.log"
-cloudflared tunnel --url "http://localhost:${TTYD_PORT}" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
-TUNNEL_PID=$!
-
-# Wait for tunnel URL (up to 30s)
-TUNNEL_URL=""
-for i in $(seq 1 30); do
-  TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
-  if [ -n "$TUNNEL_URL" ]; then break; fi
-  sleep 1
-done
-
-if [ -z "$TUNNEL_URL" ]; then
-  log "ERROR: Failed to get tunnel URL"
-  cat "$TUNNEL_LOG"
-  exit 1
-fi
-log "Tunnel URL: ${TUNNEL_URL}"
-
-# Wait for tunnel to be accessible (DNS propagation)
-log "Waiting for tunnel DNS to propagate..."
-TUNNEL_READY=false
-for i in $(seq 1 30); do
-  if curl -sf --max-time 5 "${TUNNEL_URL}/" > /dev/null 2>&1; then
-    TUNNEL_READY=true
-    log "Tunnel is accessible after ${i} attempts"
-    break
-  fi
-  sleep 2
-done
-
-if [ "$TUNNEL_READY" = "false" ]; then
-  log "WARN: Tunnel may not be ready yet, reporting anyway"
-fi
-
-# --- 4. Report session ready ---
-callback "session-ready" "{\"session_id\":\"${SESSION_ID}\",\"tunnel_url\":\"${TUNNEL_URL}/\"}"
-log "Session reported as ready."
-
-# --- 5. Poll for commands and apply ---
+# --- apply_challenge: handles both apply and validate commands ---
 apply_challenge() {
   local cmd_id="$1" challenge_json="$2" cmd_type="$3"
 
@@ -159,23 +72,16 @@ apply_challenge() {
     local validation_script
     validation_script=$(echo "$challenge_json" | jq -r '.challenge.validation_script // "validate.sh"')
 
-    # Download validation script from content repo
-    local validate_url="https://raw.githubusercontent.com/${CALLBACK_URL%%/api/*}"
-    # Use GitHub API to fetch the validation script
-    local content_owner
-    content_owner=$(echo "$CALLBACK_URL" | grep -oP 'https?://[^/]+')
     local validate_raw="https://raw.githubusercontent.com/enterbash/enter-bash-content/main/challenges/${challenge_name}/${validation_script}"
     log "Downloading validation script: ${validate_raw}"
     curl -sf "$validate_raw" -o "/tmp/validate_${challenge_name}.sh" 2>/dev/null
 
     if [ -f "/tmp/validate_${challenge_name}.sh" ]; then
-      # Copy into container
       docker cp "/tmp/validate_${challenge_name}.sh" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/${validation_script}"
       docker exec "$CONTAINER_NAME" chown "${CONTAINER_USER}:${CONTAINER_USER}" "/home/${CONTAINER_USER}/${validation_script}"
       docker exec "$CONTAINER_NAME" chmod +x "/home/${CONTAINER_USER}/${validation_script}"
     fi
 
-    # Run validation
     local output exit_code
     set +e
     output=$(docker exec "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" bash -c "
@@ -206,9 +112,8 @@ apply_challenge() {
   pre_install=$(echo "$challenge_json" | jq -r '.challenge.pre_install // [] | join(" ")')
   namespace=$(echo "$challenge_json" | jq -r '.challenge.namespace // ""')
 
-  # Install packages (image is pre-baked with all common tools; only install if something exotic is requested)
+  # Image is pre-baked; only install if something exotic is requested
   if [ -n "$packages" ] && [ "$packages" != "null" ]; then
-    # Check if any package is actually missing before running apt
     local missing
     missing=$(docker exec "$CONTAINER_NAME" bash -c "
       MISS=''
@@ -237,31 +142,25 @@ apply_challenge() {
       -o "$bundle_file" || log "WARN: Failed to download bundle"
 
     if [ -f "$bundle_file" ]; then
-      # Extract and find the challenge directory
       local extract_dir="/tmp/challenge-extract"
       rm -rf "$extract_dir" && mkdir -p "$extract_dir"
       tar xzf "$bundle_file" -C "$extract_dir" 2>/dev/null || true
 
-      # Find the challenge files directory
       local files_dir
       files_dir=$(find "$extract_dir" -type d -name "files" -path "*/${challenge_name}/*" | head -1)
       if [ -n "$files_dir" ]; then
-        # Copy files into container based on challenge spec
         local file_specs
         file_specs=$(echo "$challenge_json" | jq -c '.challenge.files // []')
         echo "$file_specs" | jq -c '.[]' 2>/dev/null | while read -r file_spec; do
-          local src dest executable cleanup_flag
+          local src dest executable
           src=$(echo "$file_spec" | jq -r '.source')
           dest=$(echo "$file_spec" | jq -r '.dest')
           executable=$(echo "$file_spec" | jq -r '.executable // false')
-          cleanup_flag=$(echo "$file_spec" | jq -r '.cleanup // false')
 
-          # Resolve ~/  to /home/learner/
           dest="${dest/#\~\//\/home\/${CONTAINER_USER}\/}"
 
           local src_path="${files_dir}/../${src}"
           if [ -f "$src_path" ]; then
-            # Ensure dest directory exists
             local dest_dir
             dest_dir=$(dirname "$dest")
             docker exec "$CONTAINER_NAME" mkdir -p "$dest_dir"
@@ -301,7 +200,120 @@ apply_challenge() {
   log "Challenge applied."
 }
 
-# --- 6. Main loop: poll commands + heartbeat ---
+# --- 1. Start Docker container ---
+log "Pulling image: ${LAB_IMAGE}"
+docker pull "$LAB_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
+
+log "Starting container: ${CONTAINER_NAME}"
+docker run -d \
+  --name "$CONTAINER_NAME" \
+  --hostname "$CONTAINER_NAME" \
+  --memory=1g \
+  --cpus=1 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  "$LAB_IMAGE" \
+  sleep infinity
+
+# Remap docker group GID to match host socket
+docker exec "$CONTAINER_NAME" bash -c "
+  SOCK_GID=\$(stat -c '%g' /var/run/docker.sock) && \
+  CURRENT_GID=\$(getent group docker | cut -d: -f3) && \
+  if [ \"\$SOCK_GID\" != \"\$CURRENT_GID\" ]; then \
+    groupmod -g \$SOCK_GID docker 2>/dev/null || true; \
+  fi
+"
+log "Container ready."
+
+# --- 2. Start ttyd ---
+log "Starting ttyd on port ${TTYD_PORT}"
+THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#2196F3","cursorAccent":"#000000","selectionBackground":"#2196F333","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
+
+ttyd \
+  --port "$TTYD_PORT" \
+  --writable \
+  -t fontSize=17 \
+  -t reconnect=0 \
+  -t "theme=${THEME}" \
+  docker exec -it "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
+TTYD_PID=$!
+sleep 2
+
+if ! kill -0 "$TTYD_PID" 2>/dev/null; then
+  log "ERROR: ttyd failed to start"
+  exit 1
+fi
+log "ttyd running (PID: ${TTYD_PID})"
+
+# --- 3. Start cloudflared tunnel ---
+log "Starting cloudflared tunnel..."
+TUNNEL_LOG="/tmp/cloudflared.log"
+cloudflared tunnel --url "http://localhost:${TTYD_PORT}" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
+TUNNEL_PID=$!
+
+# --- 4. Apply initial challenge in background while tunnel propagates ---
+# The worker created the apply command at session-create time so it's
+# immediately available. Running in background lets us overlap file copy
+# with DNS propagation (both take ~5-10s).
+APPLY_BG_PID=""
+(
+  for i in $(seq 1 10); do
+    RESP=$(poll_commands)
+    CMD=$(echo "$RESP" | jq -c '.data.commands // [] | map(select(.type == "apply")) | .[0] // empty' 2>/dev/null)
+    if [ -n "$CMD" ] && [ "$CMD" != "null" ] && [ "$CMD" != "empty" ]; then
+      CMD_ID=$(echo "$CMD" | jq -r '.id')
+      log "[apply-bg] Got apply command ${CMD_ID}, running..."
+      apply_challenge "$CMD_ID" "$CMD" "apply"
+      log "[apply-bg] Done."
+      exit 0
+    fi
+    sleep 1
+  done
+  log "[apply-bg] WARN: no apply command received after 10s"
+) &
+APPLY_BG_PID=$!
+
+# --- 5. Wait for tunnel URL (up to 30s) ---
+TUNNEL_URL=""
+for i in $(seq 1 30); do
+  TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
+  if [ -n "$TUNNEL_URL" ]; then break; fi
+  sleep 1
+done
+
+if [ -z "$TUNNEL_URL" ]; then
+  log "ERROR: Failed to get tunnel URL"
+  cat "$TUNNEL_LOG"
+  exit 1
+fi
+log "Tunnel URL: ${TUNNEL_URL}"
+
+# --- 6. Wait for tunnel DNS to propagate ---
+log "Waiting for tunnel DNS to propagate..."
+TUNNEL_READY=false
+for i in $(seq 1 30); do
+  if curl -sf --max-time 5 "${TUNNEL_URL}/" > /dev/null 2>&1; then
+    TUNNEL_READY=true
+    log "Tunnel is accessible after ${i} attempts"
+    break
+  fi
+  sleep 2
+done
+
+if [ "$TUNNEL_READY" = "false" ]; then
+  log "WARN: Tunnel may not be ready yet, reporting anyway"
+fi
+
+# --- 7. Wait for background apply to finish ---
+if [ -n "$APPLY_BG_PID" ]; then
+  log "Waiting for challenge files to finish applying..."
+  wait "$APPLY_BG_PID" 2>/dev/null || true
+fi
+
+# --- 8. Report session ready (tunnel live + files in place) ---
+callback "session-ready" "{\"session_id\":\"${SESSION_ID}\",\"tunnel_url\":\"${TUNNEL_URL}/\"}"
+log "Session reported as ready."
+
+# --- 9. Main loop: poll for validate commands + heartbeat ---
 DEADLINE=$(($(date +%s) + TIMEOUT_MINUTES * 60))
 HEARTBEAT_INTERVAL=15
 POLL_INTERVAL=5
@@ -312,13 +324,11 @@ log "Entering main loop (timeout: ${TIMEOUT_MINUTES}m)"
 while true; do
   NOW=$(date +%s)
 
-  # Check timeout
   if [ "$NOW" -ge "$DEADLINE" ]; then
     log "Session timed out."
     break
   fi
 
-  # Heartbeat
   if [ $((NOW - LAST_HEARTBEAT)) -ge "$HEARTBEAT_INTERVAL" ]; then
     ACTION=$(heartbeat)
     LAST_HEARTBEAT=$NOW
@@ -328,7 +338,6 @@ while true; do
     fi
   fi
 
-  # Poll for commands
   RESPONSE=$(poll_commands)
   if echo "$RESPONSE" | jq -e '.ok' > /dev/null 2>&1; then
     ACTION=$(echo "$RESPONSE" | jq -r '.data.action // "continue"')
