@@ -88,7 +88,8 @@ needs_privileged() {
     linux-fix-disk-permissions|\
     linux-fix-fstab|\
     linux-manage-lvm|\
-    linux-create-swap-space) return 0 ;;
+    linux-create-swap-space|\
+    linux-setup-nfs-share) return 0 ;;
     *) return 1 ;;
   esac
 }
