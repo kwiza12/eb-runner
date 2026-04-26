@@ -157,16 +157,16 @@ run_task() {
   if [ "$cmd_type" = "validate" ]; then
     log "Validating..."
     local task_name
-    task_name=$(echo "$task_json" | jq -r '.task_name // ""')
+    task_name=$(echo "$task_json" | jq -r '.challenge_name // ""')
     local validation_script
-    validation_script=$(echo "$task_json" | jq -r '.task.validation_script // "validate.sh"')
+    validation_script=$(echo "$task_json" | jq -r '.challenge.validation_script // "validate.sh"')
 
     local validate_raw="${CONTENT_BASE}/challenges/${task_name}/${validation_script}"
     log "Downloading validation script: ${validate_raw}"
-    curl -sf "$validate_raw" -o "/tmp/validate_task.sh" 2>/dev/null
+    curl -sf "$validate_raw" -o "/tmp/validate_${SESSION_ID:0:8}.sh" 2>/dev/null
 
-    if [ -f "/tmp/validate_task.sh" ]; then
-      docker cp "/tmp/validate_task.sh" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/${validation_script}"
+    if [ -f "/tmp/validate_${SESSION_ID:0:8}.sh" ]; then
+      docker cp "/tmp/validate_${SESSION_ID:0:8}.sh" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/${validation_script}"
       docker exec "$CONTAINER_NAME" chown "${CONTAINER_USER}:${CONTAINER_USER}" "/home/${CONTAINER_USER}/${validation_script}"
       docker exec "$CONTAINER_NAME" chmod +x "/home/${CONTAINER_USER}/${validation_script}"
     fi
@@ -197,9 +197,9 @@ run_task() {
   
   log "Applying..."
   local packages pre_install namespace
-  packages=$(echo "$task_json" | jq -r '.task.packages // [] | join(" ")')
-  pre_install=$(echo "$task_json" | jq -r '.task.pre_install // [] | join(" ")')
-  namespace=$(echo "$task_json" | jq -r '.task.namespace // ""')
+  packages=$(echo "$task_json" | jq -r '.challenge.packages // [] | join(" ")')
+  pre_install=$(echo "$task_json" | jq -r '.challenge.pre_install // [] | join(" ")')
+  namespace=$(echo "$task_json" | jq -r '.challenge.namespace // ""')
 
   # Image is pre-baked; only install if something exotic is requested
   if [ -n "$packages" ] && [ "$packages" != "null" ]; then
@@ -220,10 +220,10 @@ run_task() {
   fi
 
   local task_name
-  task_name=$(echo "$task_json" | jq -r '.task_name // ""')
+  task_name=$(echo "$task_json" | jq -r '.challenge_name // ""')
   if [ -n "$task_name" ]; then
     log "Fetching bundle: ${task_name}"
-    local bundle_url="${CALLBACK_URL}/${SESSION_ID}/tasks/${task_name}/bundle"
+    local bundle_url="${CALLBACK_URL}/${SESSION_ID}/challenge/${task_name}/bundle"
     local bundle_file="/tmp/task-bundle.tar.gz"
     curl -sf "$bundle_url" \
       -H "X-Callback-Token: ${CALLBACK_TOKEN}" \
@@ -238,7 +238,7 @@ run_task() {
       files_dir=$(find "$extract_dir" -type d -name "files" -path "*/${task_name}/*" | head -1)
       if [ -n "$files_dir" ]; then
         local file_specs
-        file_specs=$(echo "$task_json" | jq -c '.task.files // []')
+        file_specs=$(echo "$task_json" | jq -c '.challenge.files // []')
         echo "$file_specs" | jq -c '.[]' 2>/dev/null | while read -r file_spec; do
           local src dest executable
           src=$(echo "$file_spec" | jq -r '.source')
@@ -267,7 +267,7 @@ run_task() {
 
   # Run setup commands
   local setup_cmds
-  setup_cmds=$(echo "$task_json" | jq -r '.task.setup // []')
+  setup_cmds=$(echo "$task_json" | jq -r '.challenge.setup // []')
   echo "$setup_cmds" | jq -r '.[]' 2>/dev/null | while read -r cmd; do
     if [ -n "$cmd" ]; then
       log "  Running setup: ${cmd}"
@@ -276,7 +276,7 @@ run_task() {
   done
 
   # Cleanup files marked for cleanup
-  echo "$task_json" | jq -c '.task.files // [] | .[] | select(.cleanup == true)' 2>/dev/null | while read -r file_spec; do
+  echo "$task_json" | jq -c '.challenge.files // [] | .[] | select(.cleanup == true)' 2>/dev/null | while read -r file_spec; do
     local dest
     dest=$(echo "$file_spec" | jq -r '.dest')
     dest="${dest/#\~\//\/home\/${CONTAINER_USER}\/}"
