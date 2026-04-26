@@ -151,22 +151,22 @@ wait_k3s_ready() {
 }
 
 # --- apply ---
-apply_challenge() {
-  local cmd_id="$1" challenge_json="$2" cmd_type="$3"
+run_task() {
+  local cmd_id="$1" task_json="$2" cmd_type="$3"
 
   if [ "$cmd_type" = "validate" ]; then
-    log "Running validation..."
-    local challenge_name
-    challenge_name=$(echo "$challenge_json" | jq -r '.challenge_name // ""')
+    log "Validating..."
+    local task_name
+    task_name=$(echo "$task_json" | jq -r '.task_name // ""')
     local validation_script
-    validation_script=$(echo "$challenge_json" | jq -r '.challenge.validation_script // "validate.sh"')
+    validation_script=$(echo "$task_json" | jq -r '.task.validation_script // "validate.sh"')
 
-    local validate_raw="${CONTENT_BASE}/challenges/${challenge_name}/${validation_script}"
+    local validate_raw="${CONTENT_BASE}/challenges/${task_name}/${validation_script}"
     log "Downloading validation script: ${validate_raw}"
-    curl -sf "$validate_raw" -o "/tmp/validate_${challenge_name}.sh" 2>/dev/null
+    curl -sf "$validate_raw" -o "/tmp/validate_task.sh" 2>/dev/null
 
-    if [ -f "/tmp/validate_${challenge_name}.sh" ]; then
-      docker cp "/tmp/validate_${challenge_name}.sh" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/${validation_script}"
+    if [ -f "/tmp/validate_task.sh" ]; then
+      docker cp "/tmp/validate_task.sh" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/${validation_script}"
       docker exec "$CONTAINER_NAME" chown "${CONTAINER_USER}:${CONTAINER_USER}" "/home/${CONTAINER_USER}/${validation_script}"
       docker exec "$CONTAINER_NAME" chmod +x "/home/${CONTAINER_USER}/${validation_script}"
     fi
@@ -186,20 +186,20 @@ apply_challenge() {
 
     if [ $exit_code -eq 0 ]; then
       report_result "$cmd_id" "true" "$output" "validate"
-      log "Validation PASSED: $output"
+      log "PASS: $output"
     else
       report_result "$cmd_id" "false" "$output" "validate"
-      log "Validation FAILED: $output"
+      log "FAIL: $output"
     fi
     return
   fi
 
-  # Apply challenge
-  log "Applying challenge..."
+  
+  log "Applying..."
   local packages pre_install namespace
-  packages=$(echo "$challenge_json" | jq -r '.challenge.packages // [] | join(" ")')
-  pre_install=$(echo "$challenge_json" | jq -r '.challenge.pre_install // [] | join(" ")')
-  namespace=$(echo "$challenge_json" | jq -r '.challenge.namespace // ""')
+  packages=$(echo "$task_json" | jq -r '.task.packages // [] | join(" ")')
+  pre_install=$(echo "$task_json" | jq -r '.task.pre_install // [] | join(" ")')
+  namespace=$(echo "$task_json" | jq -r '.task.namespace // ""')
 
   # Image is pre-baked; only install if something exotic is requested
   if [ -n "$packages" ] && [ "$packages" != "null" ]; then
@@ -219,26 +219,26 @@ apply_challenge() {
     fi
   fi
 
-  local challenge_name
-  challenge_name=$(echo "$challenge_json" | jq -r '.challenge_name // ""')
-  if [ -n "$challenge_name" ]; then
-    log "Downloading challenge bundle: ${challenge_name}"
-    local bundle_url="${CALLBACK_URL}/${SESSION_ID}/challenge/${challenge_name}/bundle"
-    local bundle_file="/tmp/challenge-bundle.tar.gz"
+  local task_name
+  task_name=$(echo "$task_json" | jq -r '.task_name // ""')
+  if [ -n "$task_name" ]; then
+    log "Fetching bundle: ${task_name}"
+    local bundle_url="${CALLBACK_URL}/${SESSION_ID}/tasks/${task_name}/bundle"
+    local bundle_file="/tmp/task-bundle.tar.gz"
     curl -sf "$bundle_url" \
       -H "X-Callback-Token: ${CALLBACK_TOKEN}" \
       -o "$bundle_file" || log "WARN: Failed to download bundle"
 
     if [ -f "$bundle_file" ]; then
-      local extract_dir="/tmp/challenge-extract"
+      local extract_dir="/tmp/task-extract"
       rm -rf "$extract_dir" && mkdir -p "$extract_dir"
       tar xzf "$bundle_file" -C "$extract_dir" 2>/dev/null || true
 
       local files_dir
-      files_dir=$(find "$extract_dir" -type d -name "files" -path "*/${challenge_name}/*" | head -1)
+      files_dir=$(find "$extract_dir" -type d -name "files" -path "*/${task_name}/*" | head -1)
       if [ -n "$files_dir" ]; then
         local file_specs
-        file_specs=$(echo "$challenge_json" | jq -c '.challenge.files // []')
+        file_specs=$(echo "$task_json" | jq -c '.task.files // []')
         echo "$file_specs" | jq -c '.[]' 2>/dev/null | while read -r file_spec; do
           local src dest executable
           src=$(echo "$file_spec" | jq -r '.source')
@@ -267,7 +267,7 @@ apply_challenge() {
 
   # Run setup commands
   local setup_cmds
-  setup_cmds=$(echo "$challenge_json" | jq -r '.challenge.setup // []')
+  setup_cmds=$(echo "$task_json" | jq -r '.task.setup // []')
   echo "$setup_cmds" | jq -r '.[]' 2>/dev/null | while read -r cmd; do
     if [ -n "$cmd" ]; then
       log "  Running setup: ${cmd}"
@@ -276,7 +276,7 @@ apply_challenge() {
   done
 
   # Cleanup files marked for cleanup
-  echo "$challenge_json" | jq -c '.challenge.files // [] | .[] | select(.cleanup == true)' 2>/dev/null | while read -r file_spec; do
+  echo "$task_json" | jq -c '.task.files // [] | .[] | select(.cleanup == true)' 2>/dev/null | while read -r file_spec; do
     local dest
     dest=$(echo "$file_spec" | jq -r '.dest')
     dest="${dest/#\~\//\/home\/${CONTAINER_USER}\/}"
@@ -284,14 +284,14 @@ apply_challenge() {
     log "  Cleaned up: ${dest}"
   done
 
-  report_result "$cmd_id" "true" "Challenge applied successfully" "apply"
-  log "Challenge applied."
+  report_result "$cmd_id" "true" "Applied successfully" "apply"
+  log "Applied."
 }
 
 # --- 1. k3s ---
 KUBECONFIG_FILE=""
 if needs_k3s; then
-  log "Challenge requires Kubernetes, starting k3s..."
+  log "Starting k3s..."
   docker pull "$K3S_IMAGE" >/dev/null 2>&1 || log "WARN: k3s pull failed, trying cached"
   start_k3s || log "WARN: k3s failed to start"
 fi
@@ -313,7 +313,7 @@ if needs_k3s; then
   LAB_RUN_ARGS+=(--network "$NETWORK_NAME")
 fi
 if needs_privileged; then
-  log "Challenge requires privileged container (kernel ops)"
+  log "Privileged mode"
   LAB_RUN_ARGS+=(--privileged)
 fi
 
@@ -376,14 +376,14 @@ APPLY_BG_PID=""
     CMD=$(echo "$RESP" | jq -c '.data.commands // [] | map(select(.type == "apply")) | .[0] // empty' 2>/dev/null)
     if [ -n "$CMD" ] && [ "$CMD" != "null" ] && [ "$CMD" != "empty" ]; then
       CMD_ID=$(echo "$CMD" | jq -r '.id')
-      log "[apply-bg] Got apply command ${CMD_ID}, running..."
-      apply_challenge "$CMD_ID" "$CMD" "apply"
+      log "[apply-bg] Got task ${CMD_ID}, running..."
+      run_task "$CMD_ID" "$CMD" "apply"
       log "[apply-bg] Done."
       exit 0
     fi
     sleep 1
   done
-  log "[apply-bg] WARN: no apply command received after 10s"
+  log "[apply-bg] WARN: no task received after 10s"
 ) &
 APPLY_BG_PID=$!
 
@@ -420,7 +420,7 @@ fi
 
 # --- 7. Sync ---
 if [ -n "$APPLY_BG_PID" ]; then
-  log "Waiting for challenge files to finish applying..."
+  log "Waiting for apply..."
   wait "$APPLY_BG_PID" 2>/dev/null || true
 fi
 
@@ -468,7 +468,7 @@ while true; do
       echo "$COMMANDS" | jq -c '.[]' | while read -r cmd_json; do
         CMD_ID=$(echo "$cmd_json" | jq -r '.id')
         CMD_TYPE=$(echo "$cmd_json" | jq -r '.type')
-        apply_challenge "$CMD_ID" "$cmd_json" "$CMD_TYPE"
+        run_task "$CMD_ID" "$cmd_json" "$CMD_TYPE"
       done
     fi
   fi

@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# Core utilities + all apt packages referenced by any challenge
+# Core utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
       sudo bash-completion curl wget ca-certificates jq vim nano unzip \
       git openssh-client openssh-server \
