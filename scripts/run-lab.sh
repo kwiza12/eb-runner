@@ -12,6 +12,8 @@ CONTAINER_NAME="eb-${SESSION_ID:0:12}"
 CONTAINER_USER="learner"
 TTYD_PORT=7681
 ARTIFACTS_DIR="/tmp/lab-artifacts"
+TTYD_PID=""
+TUNNEL_PID=""
 
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -52,8 +54,8 @@ cleanup() {
   # Save bash history as artifact
   docker cp "${CONTAINER_NAME}:/home/${CONTAINER_USER}/.bash_history" "${ARTIFACTS_DIR}/bash_history" 2>/dev/null || true
   docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-  kill "$TTYD_PID" 2>/dev/null || true
-  kill "$TUNNEL_PID" 2>/dev/null || true
+  [ -n "$TTYD_PID" ] && kill "$TTYD_PID" 2>/dev/null || true
+  [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   # Report workflow complete
   callback "workflow-complete" "{\"session_id\":\"${SESSION_ID}\"}"
   log "Cleanup done."
@@ -87,7 +89,7 @@ ttyd \
   --writable \
   --base-path /terminal \
   --ping-interval 30 \
-  docker exec -it "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
+  docker exec -i "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
 TTYD_PID=$!
 sleep 2
 
