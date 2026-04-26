@@ -1,0 +1,63 @@
+name: Lab Session
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: 'Lab session ID'
+        required: true
+      callback_url:
+        description: 'Callback URL for the Enter Bash API'
+        required: true
+      callback_token:
+        description: 'Authentication token for callbacks'
+        required: true
+      timeout_minutes:
+        description: 'Session timeout in minutes'
+        required: true
+        default: '55'
+      challenge_name:
+        description: 'Challenge to apply'
+        required: true
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl wget
+
+          # Install ttyd
+          wget -q https://github.com/nickvdyck/ttyd-nightly/releases/latest/download/ttyd-linux-x86_64 -O /usr/local/bin/ttyd || \
+          wget -q https://github.com/nickvdyck/ttyd-nightly/releases/download/2025.04.14/ttyd-linux-x86_64 -O /usr/local/bin/ttyd
+          chmod +x /usr/local/bin/ttyd
+
+          # Install cloudflared
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+
+      - name: Start lab environment
+        env:
+          SESSION_ID: ${{ inputs.session_id }}
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          CALLBACK_TOKEN: ${{ inputs.callback_token }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+          CHALLENGE_NAME: ${{ inputs.challenge_name }}
+        run: |
+          chmod +x scripts/run-lab.sh
+          bash scripts/run-lab.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-${{ inputs.session_id }}
+          path: /tmp/lab-artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
