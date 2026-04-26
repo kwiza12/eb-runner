@@ -87,7 +87,7 @@ log "Starting ttyd on port ${TTYD_PORT}"
 ttyd \
   --port "$TTYD_PORT" \
   --writable \
-  docker exec -i "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
+  docker exec -it "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
 TTYD_PID=$!
 sleep 2
 
