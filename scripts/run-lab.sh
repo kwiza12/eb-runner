@@ -163,6 +163,7 @@ apply_challenge() {
 
     # Try to run validate.sh from the container
     local output exit_code
+    set +e
     output=$(docker exec "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" bash -c "
       cd /home/${CONTAINER_USER} && \
       if [ -f '${validation_script}' ]; then
@@ -172,6 +173,7 @@ apply_challenge() {
       fi
     " 2>&1)
     exit_code=$?
+    set -e
 
     if [ $exit_code -eq 0 ]; then
       report_result "$cmd_id" "true" "$output" "validate"
