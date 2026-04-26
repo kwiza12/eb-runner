@@ -18,7 +18,7 @@ TTYD_PID=""
 TUNNEL_PID=""
 K3S_STARTED="false"
 LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
-K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.28.5-k3s1}"
+K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.35.3-k3s1}"
 PRIVILEGED="${PRIVILEGED:-false}"
 
 mkdir -p "$ARTIFACTS_DIR"
