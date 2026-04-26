@@ -162,7 +162,7 @@ apply_challenge() {
     validation_script=$(echo "$challenge_json" | jq -r '.challenge.validation_script // "validate.sh"')
 
     # Try to run validate.sh from the container
-    local output
+    local output exit_code
     output=$(docker exec "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" bash -c "
       cd /home/${CONTAINER_USER} && \
       if [ -f '${validation_script}' ]; then
@@ -170,8 +170,8 @@ apply_challenge() {
       else
         echo 'Validation script not found' && exit 1
       fi
-    " 2>&1) || true
-    local exit_code=$?
+    " 2>&1)
+    exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
       report_result "$cmd_id" "true" "$output" "validate"
