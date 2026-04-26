@@ -66,7 +66,7 @@ trap cleanup EXIT
 log "Starting container: ${CONTAINER_NAME}"
 docker run -d \
   --name "$CONTAINER_NAME" \
-  --hostname runner \
+  --hostname "$CONTAINER_NAME" \
   --memory=1g \
   --cpus=1 \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -80,6 +80,8 @@ docker exec "$CONTAINER_NAME" bash -c "
   echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CONTAINER_USER} && \
   apt-get update -qq && \
   apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq docker.io && \
+  SOCK_GID=\$(stat -c '%g' /var/run/docker.sock) && \
+  groupmod -g \$SOCK_GID docker 2>/dev/null || groupadd -g \$SOCK_GID docker 2>/dev/null || true && \
   usermod -aG docker ${CONTAINER_USER} && \
   echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/${CONTAINER_USER}/.bashrc && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
