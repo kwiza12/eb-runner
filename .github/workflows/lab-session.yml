@@ -19,6 +19,10 @@ on:
       challenge_name:
         description: 'Challenge to apply'
         required: true
+      privileged:
+        description: 'Run container in privileged mode (for kernel ops)'
+        required: false
+        default: 'false'
 
 jobs:
   lab:
@@ -55,6 +59,7 @@ jobs:
           CALLBACK_TOKEN: ${{ inputs.callback_token }}
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           CHALLENGE_NAME: ${{ inputs.challenge_name }}
+          PRIVILEGED: ${{ inputs.privileged }}
         run: |
           chmod +x scripts/run-lab.sh
           bash scripts/run-lab.sh

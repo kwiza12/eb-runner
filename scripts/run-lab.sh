@@ -18,7 +18,7 @@ TTYD_PID=""
 TUNNEL_PID=""
 K3S_STARTED="false"
 LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
-K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.28.5-k3s1}"
+PRIVILEGED="${PRIVILEGED:-false}"
 
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -79,19 +79,10 @@ needs_k3s() {
   esac
 }
 
-# --- Detect if this challenge needs privileged container (kernel ops) ---
-# iptables, loop mounts, LVM, swap, dummy network interfaces
+# --- Detect if this challenge needs a privileged container ---
+# Driven by the 'privileged: true' field in challenge.yaml, passed as PRIVILEGED env var.
 needs_privileged() {
-  case "$CHALLENGE_NAME" in
-    linux-fix-iptables|\
-    linux-fix-network-interface|\
-    linux-fix-disk-permissions|\
-    linux-fix-fstab|\
-    linux-manage-lvm|\
-    linux-create-swap-space|\
-    linux-setup-nfs-share) return 0 ;;
-    *) return 1 ;;
-  esac
+  [ "$PRIVILEGED" = "true" ]
 }
 
 # --- start_k3s: brings up a k3s server in a sibling container on a dedicated network ---
