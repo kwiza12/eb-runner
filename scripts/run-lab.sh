@@ -66,19 +66,21 @@ trap cleanup EXIT
 log "Starting container: ${CONTAINER_NAME}"
 docker run -d \
   --name "$CONTAINER_NAME" \
-  --hostname learner \
+  --hostname runner \
   --memory=1g \
   --cpus=1 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   ubuntu:24.04 \
   sleep infinity
 
-# Create learner user with sudo
+# Create runner user with sudo + docker access
 docker exec "$CONTAINER_NAME" bash -c "
   useradd -m -s /bin/bash ${CONTAINER_USER} && \
   mkdir -p /etc/sudoers.d && \
   echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CONTAINER_USER} && \
   apt-get update -qq && \
-  apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq && \
+  apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq docker.io && \
+  usermod -aG docker ${CONTAINER_USER} && \
   echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/${CONTAINER_USER}/.bashrc && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 "
@@ -86,7 +88,7 @@ log "Container ready."
 
 # --- 2. Start ttyd ---
 log "Starting ttyd on port ${TTYD_PORT}"
-THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#00ff00","cursorAccent":"#000000","selectionBackground":"#00ff0033","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
+THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#2196F3","cursorAccent":"#000000","selectionBackground":"#2196F333","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
 
 ttyd \
   --port "$TTYD_PORT" \
