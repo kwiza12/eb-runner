@@ -33,9 +33,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq curl wget
 
-          # Install ttyd (official release)
-          wget -q https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O /usr/local/bin/ttyd
-          chmod +x /usr/local/bin/ttyd
+          # Install ttyd via snap (more reliable than binary download)
+          sudo snap install ttyd --classic || {
+            # Fallback: build-essential approach
+            sudo apt-get install -y -qq cmake g++ pkg-config git libjson-c-dev libwebsockets-dev
+            git clone --depth=1 https://github.com/tsl0922/ttyd.git /tmp/ttyd-build
+            cd /tmp/ttyd-build && mkdir build && cd build
+            cmake .. && make && sudo make install
+          }
 
           # Install cloudflared
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
