@@ -79,6 +79,20 @@ needs_k3s() {
   esac
 }
 
+# --- Detect if this challenge needs privileged container (kernel ops) ---
+# iptables, loop mounts, LVM, swap, dummy network interfaces
+needs_privileged() {
+  case "$CHALLENGE_NAME" in
+    linux-fix-iptables|\
+    linux-fix-network-interface|\
+    linux-fix-disk-permissions|\
+    linux-fix-fstab|\
+    linux-manage-lvm|\
+    linux-create-swap-space) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- start_k3s: brings up a k3s server in a sibling container on a dedicated network ---
 # Sets global KUBECONFIG_FILE on success.
 start_k3s() {
@@ -307,6 +321,10 @@ LAB_RUN_ARGS=(
 if needs_k3s; then
   # Attach to the same network as k3s so `kubectl` can reach the server by hostname
   LAB_RUN_ARGS+=(--network "$NETWORK_NAME")
+fi
+if needs_privileged; then
+  log "Challenge requires privileged container (kernel ops)"
+  LAB_RUN_ARGS+=(--privileged)
 fi
 
 docker run -d "${LAB_RUN_ARGS[@]}" "$LAB_IMAGE" sleep infinity
