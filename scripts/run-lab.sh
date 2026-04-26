@@ -155,13 +155,28 @@ apply_challenge() {
 
   if [ "$cmd_type" = "validate" ]; then
     log "Running validation..."
-    # Download and run validation script
     local challenge_name
     challenge_name=$(echo "$challenge_json" | jq -r '.challenge_name // ""')
     local validation_script
     validation_script=$(echo "$challenge_json" | jq -r '.challenge.validation_script // "validate.sh"')
 
-    # Try to run validate.sh from the container
+    # Download validation script from content repo
+    local validate_url="https://raw.githubusercontent.com/${CALLBACK_URL%%/api/*}"
+    # Use GitHub API to fetch the validation script
+    local content_owner
+    content_owner=$(echo "$CALLBACK_URL" | grep -oP 'https?://[^/]+')
+    local validate_raw="https://raw.githubusercontent.com/enterbash/enter-bash-content/main/challenges/${challenge_name}/${validation_script}"
+    log "Downloading validation script: ${validate_raw}"
+    curl -sf "$validate_raw" -o "/tmp/validate_${challenge_name}.sh" 2>/dev/null
+
+    if [ -f "/tmp/validate_${challenge_name}.sh" ]; then
+      # Copy into container
+      docker cp "/tmp/validate_${challenge_name}.sh" "${CONTAINER_NAME}:/home/${CONTAINER_USER}/${validation_script}"
+      docker exec "$CONTAINER_NAME" chown "${CONTAINER_USER}:${CONTAINER_USER}" "/home/${CONTAINER_USER}/${validation_script}"
+      docker exec "$CONTAINER_NAME" chmod +x "/home/${CONTAINER_USER}/${validation_script}"
+    fi
+
+    # Run validation
     local output exit_code
     set +e
     output=$(docker exec "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" bash -c "
@@ -177,10 +192,10 @@ apply_challenge() {
 
     if [ $exit_code -eq 0 ]; then
       report_result "$cmd_id" "true" "$output" "validate"
-      log "Validation PASSED"
+      log "Validation PASSED: $output"
     else
       report_result "$cmd_id" "false" "$output" "validate"
-      log "Validation FAILED"
+      log "Validation FAILED: $output"
     fi
     return
   fi
