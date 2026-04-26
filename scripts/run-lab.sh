@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Configuration ---
+
 SESSION_ID="${SESSION_ID:?SESSION_ID is required}"
 CALLBACK_URL="${CALLBACK_URL:?CALLBACK_URL is required}"
 CALLBACK_TOKEN="${CALLBACK_TOKEN:?CALLBACK_TOKEN is required}"
@@ -17,13 +17,14 @@ ARTIFACTS_DIR="/tmp/lab-artifacts"
 TTYD_PID=""
 TUNNEL_PID=""
 K3S_STARTED="false"
-LAB_IMAGE="${LAB_IMAGE:-karthickk/enterbash:latest}"
+LAB_IMAGE="${LAB_IMAGE:?LAB_IMAGE is required}"
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.35.3-k3s1}"
 PRIVILEGED="${PRIVILEGED:-false}"
+CONTENT_BASE="${CONTENT_BASE:-}"
 
 mkdir -p "$ARTIFACTS_DIR"
 
-# --- Helper functions ---
+
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 callback() {
@@ -71,8 +72,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Detect if this challenge needs a k8s cluster ---
-# Triggered by k8s-* prefix or the standalone fix-crashlooping-pod challenge.
+# --- Cluster detection ---
 needs_k3s() {
   case "$CHALLENGE_NAME" in
     k8s-*|fix-crashlooping-pod) return 0 ;;
@@ -80,14 +80,12 @@ needs_k3s() {
   esac
 }
 
-# --- Detect if this challenge needs a privileged container ---
-# Driven by the 'privileged: true' field in challenge.yaml, passed as PRIVILEGED env var.
+# --- Privilege detection ---
 needs_privileged() {
   [ "$PRIVILEGED" = "true" ]
 }
 
-# --- start_k3s: brings up a k3s server in a sibling container on a dedicated network ---
-# Sets global KUBECONFIG_FILE on success.
+# --- start_k3s ---
 start_k3s() {
   log "Creating docker network ${NETWORK_NAME}" >&2
   docker network create "$NETWORK_NAME" >/dev/null
@@ -135,7 +133,7 @@ start_k3s() {
   log "k3s kubeconfig at ${KUBECONFIG_FILE}" >&2
 }
 
-# --- wait_k3s_ready: polls until the node is Ready (called after lab container exists) ---
+# --- wait_k3s_ready ---
 wait_k3s_ready() {
   log "Waiting for k3s node to become Ready..."
   for i in $(seq 1 60); do
@@ -152,7 +150,7 @@ wait_k3s_ready() {
   return 1
 }
 
-# --- apply_challenge: handles both apply and validate commands ---
+# --- apply ---
 apply_challenge() {
   local cmd_id="$1" challenge_json="$2" cmd_type="$3"
 
@@ -163,7 +161,7 @@ apply_challenge() {
     local validation_script
     validation_script=$(echo "$challenge_json" | jq -r '.challenge.validation_script // "validate.sh"')
 
-    local validate_raw="https://raw.githubusercontent.com/enterbash/enter-bash-content/main/challenges/${challenge_name}/${validation_script}"
+    local validate_raw="${CONTENT_BASE}/challenges/${challenge_name}/${validation_script}"
     log "Downloading validation script: ${validate_raw}"
     curl -sf "$validate_raw" -o "/tmp/validate_${challenge_name}.sh" 2>/dev/null
 
@@ -221,7 +219,6 @@ apply_challenge() {
     fi
   fi
 
-  # Download and extract challenge files
   local challenge_name
   challenge_name=$(echo "$challenge_json" | jq -r '.challenge_name // ""')
   if [ -n "$challenge_name" ]; then
@@ -291,7 +288,7 @@ apply_challenge() {
   log "Challenge applied."
 }
 
-# --- 1. Start k3s in background (if needed) ---
+# --- 1. k3s ---
 KUBECONFIG_FILE=""
 if needs_k3s; then
   log "Challenge requires Kubernetes, starting k3s..."
@@ -299,7 +296,7 @@ if needs_k3s; then
   start_k3s || log "WARN: k3s failed to start"
 fi
 
-# --- 2. Start lab container ---
+# --- 2. Container ---
 log "Pulling image: ${LAB_IMAGE}"
 docker pull "$LAB_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
 
@@ -347,7 +344,6 @@ if needs_k3s; then
   wait_k3s_ready || log "WARN: k3s not ready — kubectl commands may fail until node comes up"
 fi
 
-# --- 2. Start ttyd ---
 log "Starting ttyd on port ${TTYD_PORT}"
 THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#2196F3","cursorAccent":"#000000","selectionBackground":"#2196F333","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
 
@@ -367,16 +363,12 @@ if ! kill -0 "$TTYD_PID" 2>/dev/null; then
 fi
 log "ttyd running (PID: ${TTYD_PID})"
 
-# --- 3. Start cloudflared tunnel ---
 log "Starting cloudflared tunnel..."
 TUNNEL_LOG="/tmp/cloudflared.log"
 cloudflared tunnel --url "http://localhost:${TTYD_PORT}" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
 TUNNEL_PID=$!
 
-# --- 4. Apply initial challenge in background while tunnel propagates ---
-# The worker created the apply command at session-create time so it's
-# immediately available. Running in background lets us overlap file copy
-# with DNS propagation (both take ~5-10s).
+# --- 4. Background apply ---
 APPLY_BG_PID=""
 (
   for i in $(seq 1 10); do
@@ -395,7 +387,7 @@ APPLY_BG_PID=""
 ) &
 APPLY_BG_PID=$!
 
-# --- 5. Wait for tunnel URL (up to 30s) ---
+# --- 5. Tunnel URL ---
 TUNNEL_URL=""
 for i in $(seq 1 30); do
   TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
@@ -410,7 +402,7 @@ if [ -z "$TUNNEL_URL" ]; then
 fi
 log "Tunnel URL: ${TUNNEL_URL}"
 
-# --- 6. Wait for tunnel DNS to propagate ---
+# --- 6. DNS wait ---
 log "Waiting for tunnel DNS to propagate..."
 TUNNEL_READY=false
 for i in $(seq 1 30); do
@@ -426,17 +418,17 @@ if [ "$TUNNEL_READY" = "false" ]; then
   log "WARN: Tunnel may not be ready yet, reporting anyway"
 fi
 
-# --- 7. Wait for background apply to finish ---
+# --- 7. Sync ---
 if [ -n "$APPLY_BG_PID" ]; then
   log "Waiting for challenge files to finish applying..."
   wait "$APPLY_BG_PID" 2>/dev/null || true
 fi
 
-# --- 8. Report session ready (tunnel live + files in place) ---
+# --- 8. Ready ---
 callback "session-ready" "{\"session_id\":\"${SESSION_ID}\",\"tunnel_url\":\"${TUNNEL_URL}/\"}"
 log "Session reported as ready."
 
-# --- 9. Main loop: poll for validate commands + heartbeat ---
+# --- 9. Main loop ---
 DEADLINE=$(($(date +%s) + TIMEOUT_MINUTES * 60))
 HEARTBEAT_INTERVAL=15
 POLL_INTERVAL=5

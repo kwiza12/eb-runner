@@ -1,26 +1,26 @@
-name: Lab Session
+name: Run
 
 on:
   workflow_dispatch:
     inputs:
       session_id:
-        description: 'Lab session ID'
+        description: 'Session ID'
         required: true
       callback_url:
-        description: 'Callback URL for the Enter Bash API'
+        description: 'Callback URL'
         required: true
       callback_token:
-        description: 'Authentication token for callbacks'
+        description: 'Auth token'
         required: true
       timeout_minutes:
-        description: 'Session timeout in minutes'
+        description: 'Timeout'
         required: true
         default: '55'
       challenge_name:
-        description: 'Challenge to apply'
+        description: 'Task'
         required: true
       privileged:
-        description: 'Run container in privileged mode (for kernel ops)'
+        description: 'Privileged'
         required: false
         default: 'false'
 
@@ -60,6 +60,8 @@ jobs:
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           CHALLENGE_NAME: ${{ inputs.challenge_name }}
           PRIVILEGED: ${{ inputs.privileged }}
+          CONTENT_BASE: ${{ secrets.CONTENT_BASE }}
+          LAB_IMAGE: ${{ secrets.LAB_IMAGE }}
         run: |
           chmod +x scripts/run-lab.sh
           bash scripts/run-lab.sh
