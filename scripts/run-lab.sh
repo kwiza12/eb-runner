@@ -9,7 +9,7 @@ TIMEOUT_MINUTES="${TIMEOUT_MINUTES:-55}"
 CHALLENGE_NAME="${CHALLENGE_NAME:?CHALLENGE_NAME is required}"
 
 CONTAINER_NAME="eb-${SESSION_ID:0:12}"
-CONTAINER_USER="learner"
+CONTAINER_USER="runner"
 TTYD_PORT=7681
 ARTIFACTS_DIR="/tmp/lab-artifacts"
 TTYD_PID=""
@@ -75,18 +75,25 @@ docker run -d \
 # Create learner user with sudo
 docker exec "$CONTAINER_NAME" bash -c "
   useradd -m -s /bin/bash ${CONTAINER_USER} && \
+  mkdir -p /etc/sudoers.d && \
+  echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CONTAINER_USER} && \
   apt-get update -qq && \
   apt-get install -y -qq sudo bash-completion curl wget ca-certificates jq && \
-  echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers && \
+  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/${CONTAINER_USER}/.bashrc && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 "
 log "Container ready."
 
 # --- 2. Start ttyd ---
 log "Starting ttyd on port ${TTYD_PORT}"
+THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#00ff00","cursorAccent":"#000000","selectionBackground":"#00ff0033","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
+
 ttyd \
   --port "$TTYD_PORT" \
   --writable \
+  -t fontSize=17 \
+  -t reconnect=0 \
+  -t "theme=${THEME}" \
   docker exec -it "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
 TTYD_PID=$!
 sleep 2
