@@ -87,8 +87,6 @@ log "Starting ttyd on port ${TTYD_PORT}"
 ttyd \
   --port "$TTYD_PORT" \
   --writable \
-  --base-path /terminal \
-  --ping-interval 30 \
   docker exec -i "$CONTAINER_NAME" sudo -u "$CONTAINER_USER" -i &
 TTYD_PID=$!
 sleep 2
@@ -121,7 +119,7 @@ fi
 log "Tunnel URL: ${TUNNEL_URL}"
 
 # --- 4. Report session ready ---
-callback "session-ready" "{\"session_id\":\"${SESSION_ID}\",\"tunnel_url\":\"${TUNNEL_URL}/terminal/\"}"
+callback "session-ready" "{\"session_id\":\"${SESSION_ID}\",\"tunnel_url\":\"${TUNNEL_URL}/\"}"
 log "Session reported as ready."
 
 # --- 5. Poll for commands and apply ---
