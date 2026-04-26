@@ -32,6 +32,11 @@ RUN KV=$(curl -fsSL https://dl.k8s.io/release/stable.txt) \
     && chmod +x /usr/local/bin/kubectl \
     && kubectl version --client=true
 
+# kubeconform (offline YAML schema validator). Schemas fetched on first use.
+RUN curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+      | tar -xz -C /usr/local/bin kubeconform \
+    && kubeconform -v
+
 # Create runner user with sudo; docker group GID gets remapped at runtime
 RUN useradd -m -s /bin/bash runner \
     && mkdir -p /etc/sudoers.d \
