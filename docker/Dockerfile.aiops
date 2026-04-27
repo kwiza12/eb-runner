@@ -40,7 +40,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
       numpy pandas scikit-learn
 
 RUN pip3 install --no-cache-dir --break-system-packages \
-      statsmodels drain3 networkx flask requests matplotlib
+      statsmodels drain3 networkx flask requests matplotlib --ignore-installed blinker
 
 # Prophet (heavy — optional, allow failure)
 RUN pip3 install --no-cache-dir --break-system-packages prophet \
