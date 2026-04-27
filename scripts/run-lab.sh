@@ -80,7 +80,7 @@ trap cleanup EXIT
 # --- Cluster detection ---
 needs_k3s() {
   case "$CHALLENGE_NAME" in
-    k8s-*|fix-crashlooping-pod) return 0 ;;
+    k8s-*|fix-crashlooping-pod|aiops-auto-diagnostics|aiops-auto-restart-pods|aiops-auto-scale-on-anomaly|aiops-self-healing-operator) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -88,6 +88,14 @@ needs_k3s() {
 # --- Privilege detection ---
 needs_privileged() {
   [ "$PRIVILEGED" = "true" ]
+}
+
+# --- AIOps image detection ---
+needs_aiops_image() {
+  case "$CHALLENGE_NAME" in
+    aiops-*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # --- start_k3s ---
@@ -302,8 +310,15 @@ if needs_k3s; then
 fi
 
 # --- 2. Container ---
-log "Pulling image: ${LAB_IMAGE}"
-docker pull "$LAB_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
+EFFECTIVE_IMAGE="$LAB_IMAGE"
+if needs_aiops_image; then
+  AIOPS_IMAGE="${AIOPS_LAB_IMAGE:-karthickk/enterbash-aiops:latest}"
+  log "AIOps challenge detected, using image: ${AIOPS_IMAGE}"
+  EFFECTIVE_IMAGE="$AIOPS_IMAGE"
+fi
+
+log "Pulling image: ${EFFECTIVE_IMAGE}"
+docker pull "$EFFECTIVE_IMAGE" >/dev/null 2>&1 || log "WARN: pull failed, trying cached image"
 
 log "Starting container: ${CONTAINER_NAME}"
 LAB_RUN_ARGS=(
@@ -326,7 +341,7 @@ if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   log "Exposing web port ${WEB_PORT} -> host ${EXPOSED_WEB_PORT}"
 fi
 
-docker run -d "${LAB_RUN_ARGS[@]}" "$LAB_IMAGE" sleep infinity
+docker run -d "${LAB_RUN_ARGS[@]}" "$EFFECTIVE_IMAGE" sleep infinity
 
 # Remap docker group GID to match host socket
 docker exec "$CONTAINER_NAME" bash -c "
