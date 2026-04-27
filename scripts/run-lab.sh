@@ -387,19 +387,19 @@ log "ttyd running (PID: ${TTYD_PID})"
 TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   # Get container IP to proxy directly (avoids port mapping issues)
-  CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CONTAINER_NAME")
-  if [ -z "$CONTAINER_IP" ]; then
-    log "WARN: Could not get container IP, browser tab won't work"
-  else
-    log "Starting Caddy reverse proxy (web_port=${WEB_PORT}, container_ip=${CONTAINER_IP})..."
-    CADDYFILE="/tmp/Caddyfile"
-    cat > "$CADDYFILE" << CADDYEOF
+    CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CONTAINER_NAME")
+    if [ -z "$CONTAINER_IP" ]; then
+      log "WARN: Could not get container IP, browser tab won't work"
+    else
+      log "Starting Caddy reverse proxy (web_port=${WEB_PORT}, container_ip=${CONTAINER_IP})..."
+      CADDYFILE="/tmp/Caddyfile"
+      cat > "$CADDYFILE" << CADDYEOF
 :${CADDY_PORT} {
-  handle /browser/* {
-    reverse_proxy ${CONTAINER_IP}:${WEB_PORT}
+  handle_path /terminal/* {
+    reverse_proxy localhost:${TTYD_PORT}
   }
   handle {
-    reverse_proxy localhost:${TTYD_PORT}
+    reverse_proxy ${CONTAINER_IP}:${WEB_PORT}
   }
 }
 CADDYEOF
