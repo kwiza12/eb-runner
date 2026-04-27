@@ -23,13 +23,22 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push base image
         uses: docker/build-push-action@v5
         with:
           context: ./docker
+          file: ./docker/Dockerfile
           push: true
-          tags: |
-            ${{ secrets.LAB_IMAGE }}
-            ${{ secrets.LAB_IMAGE }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ secrets.LAB_IMAGE }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Build and push AIOps image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile.aiops
+          push: true
+          tags: karthickk/enterbash-aiops:latest
+          cache-from: type=gha,scope=aiops
+          cache-to: type=gha,mode=max,scope=aiops
