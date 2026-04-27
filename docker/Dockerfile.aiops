@@ -30,10 +30,17 @@ RUN curl -fsSL -o /tmp/caddy.deb \
       https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.deb \
     && dpkg -i /tmp/caddy.deb && rm /tmp/caddy.deb
 
-# Python ML/AIOps stack
+# Python ML/AIOps stack (prophet installed separately — needs cmdstan)
 RUN pip3 install --no-cache-dir --break-system-packages \
-      scikit-learn pandas numpy statsmodels prophet drain3 \
+      scikit-learn pandas numpy statsmodels drain3 \
       networkx flask requests matplotlib
+
+# Prophet (heavy build — install with cmdstan backend)
+RUN pip3 install --no-cache-dir --break-system-packages \
+      cmdstanpy \
+    && python3 -m cmdstanpy.install_cmdstan --cores 2 \
+    && pip3 install --no-cache-dir --break-system-packages prophet \
+    || echo "WARN: Prophet install failed, will be available via pip at runtime"
 
 # Fluent Bit
 RUN curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /usr/share/keyrings/fluentbit.gpg \
