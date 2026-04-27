@@ -18,11 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends apt-transport-h
     && apt-get update && apt-get install -y --no-install-recommends grafana \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# OpenTelemetry Collector
-RUN curl -fsSL -o /tmp/otelcol.deb \
-      https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.96.0/otelcol-contrib_0.96.0_linux_amd64.deb \
-    && dpkg -i /tmp/otelcol.deb || apt-get install -f -y \
-    && rm /tmp/otelcol.deb
+# OpenTelemetry Collector (binary, no deb dependencies)
+RUN curl -fsSL -o /tmp/otelcol.tar.gz \
+      https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.96.0/otelcol-contrib_0.96.0_linux_amd64.tar.gz \
+    && tar xzf /tmp/otelcol.tar.gz -C /usr/local/bin otelcol-contrib \
+    && chmod +x /usr/local/bin/otelcol-contrib \
+    && rm /tmp/otelcol.tar.gz
 
 # Caddy (reverse proxy for browser tab)
 RUN curl -fsSL -o /tmp/caddy.deb \
