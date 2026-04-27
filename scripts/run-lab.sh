@@ -394,7 +394,7 @@ if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   CADDYFILE="/tmp/Caddyfile"
   cat > "$CADDYFILE" << CADDYEOF
 :${CADDY_PORT} {
-  handle_path /browser/* {
+  handle /browser/* {
     reverse_proxy localhost:${EXPOSED_WEB_PORT}
   }
   handle {
