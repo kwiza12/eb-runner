@@ -21,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends apt-transport-h
 # OpenTelemetry Collector
 RUN curl -fsSL -o /tmp/otelcol.deb \
       https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.96.0/otelcol-contrib_0.96.0_linux_amd64.deb \
-    && dpkg -i /tmp/otelcol.deb && rm /tmp/otelcol.deb
+    && dpkg -i /tmp/otelcol.deb || apt-get install -f -y \
+    && rm /tmp/otelcol.deb
 
 # Caddy (reverse proxy for browser tab)
 RUN curl -fsSL -o /tmp/caddy.deb \
