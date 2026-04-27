@@ -1,0 +1,25 @@
+# Caddy reverse proxy for AIOps challenges with browser tab
+# Sits in front of ttyd + web service, single port for cloudflared tunnel
+#
+# Usage: WEB_PORT=3000 caddy run --config /etc/caddy/Caddyfile
+# If WEB_PORT is not set, all traffic goes to ttyd.
+
+:8080 {
+	# Terminal: /terminal/* -> ttyd on :7681
+	handle_path /terminal/* {
+		reverse_proxy localhost:7681
+	}
+
+	# WebSocket upgrade for ttyd (needed for terminal to work via /terminal/)
+	@terminal_ws {
+		path /terminal/ws
+	}
+	handle @terminal_ws {
+		reverse_proxy localhost:7681
+	}
+
+	# Everything else -> web service (Grafana, Prometheus UI, etc.)
+	handle {
+		reverse_proxy localhost:{$WEB_PORT:3000}
+	}
+}

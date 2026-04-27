@@ -20,7 +20,11 @@ K3S_STARTED="false"
 LAB_IMAGE="${LAB_IMAGE:?LAB_IMAGE is required}"
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.35.3-k3s1}"
 PRIVILEGED="${PRIVILEGED:-false}"
+WEB_PORT="${WEB_PORT:-0}"
 CONTENT_BASE="${CONTENT_BASE:-}"
+CADDY_PID=""
+CADDY_PORT=8080
+EXPOSED_WEB_PORT=13080
 
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -66,6 +70,7 @@ cleanup() {
   fi
   docker network rm "$NETWORK_NAME" 2>/dev/null || true
   [ -n "$TTYD_PID" ] && kill "$TTYD_PID" 2>/dev/null || true
+  [ -n "$CADDY_PID" ] && kill "$CADDY_PID" 2>/dev/null || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   callback "workflow-complete" "{\"session_id\":\"${SESSION_ID}\"}"
   log "Cleanup done."
@@ -316,6 +321,10 @@ if needs_privileged; then
   log "Privileged mode"
   LAB_RUN_ARGS+=(--privileged)
 fi
+if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
+  LAB_RUN_ARGS+=(-p "${EXPOSED_WEB_PORT}:${WEB_PORT}")
+  log "Exposing web port ${WEB_PORT} -> host ${EXPOSED_WEB_PORT}"
+fi
 
 docker run -d "${LAB_RUN_ARGS[@]}" "$LAB_IMAGE" sleep infinity
 
@@ -363,9 +372,36 @@ if ! kill -0 "$TTYD_PID" 2>/dev/null; then
 fi
 log "ttyd running (PID: ${TTYD_PID})"
 
+# --- 3b. Caddy reverse proxy (when web_port is set) ---
+TUNNEL_TARGET_PORT="$TTYD_PORT"
+if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
+  log "Starting Caddy reverse proxy (web_port=${WEB_PORT})..."
+  CADDYFILE="/tmp/Caddyfile"
+  cat > "$CADDYFILE" << CADDYEOF
+:${CADDY_PORT} {
+  handle_path /browser/* {
+    reverse_proxy localhost:${EXPOSED_WEB_PORT}
+  }
+  handle {
+    reverse_proxy localhost:${TTYD_PORT}
+  }
+}
+CADDYEOF
+  caddy run --config "$CADDYFILE" > /tmp/caddy.log 2>&1 &
+  CADDY_PID=$!
+  sleep 1
+  if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+    log "WARN: Caddy failed to start, falling back to direct ttyd tunnel"
+    cat /tmp/caddy.log
+  else
+    log "Caddy running (PID: ${CADDY_PID})"
+    TUNNEL_TARGET_PORT="$CADDY_PORT"
+  fi
+fi
+
 log "Starting cloudflared tunnel..."
 TUNNEL_LOG="/tmp/cloudflared.log"
-cloudflared tunnel --url "http://localhost:${TTYD_PORT}" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
+cloudflared tunnel --url "http://localhost:${TUNNEL_TARGET_PORT}" --no-autoupdate > "$TUNNEL_LOG" 2>&1 &
 TUNNEL_PID=$!
 
 # --- 4. Background apply ---

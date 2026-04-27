@@ -1,0 +1,44 @@
+# AIOps variant — extends base enterbash image with observability + ML stack
+FROM karthickk/enterbash:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Observability tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      prometheus prometheus-node-exporter prometheus-alertmanager \
+      stress-ng \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Grafana (official APT repo)
+RUN apt-get update && apt-get install -y --no-install-recommends apt-transport-https software-properties-common \
+    && curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /usr/share/keyrings/grafana.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+       > /etc/apt/sources.list.d/grafana.list \
+    && apt-get update && apt-get install -y --no-install-recommends grafana \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# OpenTelemetry Collector
+RUN curl -fsSL -o /tmp/otelcol.deb \
+      https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.96.0/otelcol-contrib_0.96.0_linux_amd64.deb \
+    && dpkg -i /tmp/otelcol.deb && rm /tmp/otelcol.deb
+
+# Caddy (reverse proxy for browser tab)
+RUN curl -fsSL -o /tmp/caddy.deb \
+      https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.deb \
+    && dpkg -i /tmp/caddy.deb && rm /tmp/caddy.deb
+
+# Python ML/AIOps stack
+RUN pip3 install --no-cache-dir --break-system-packages \
+      scikit-learn pandas numpy statsmodels prophet drain3 \
+      networkx flask requests matplotlib
+
+# Fluent Bit
+RUN curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /usr/share/keyrings/fluentbit.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/fluentbit.gpg] https://packages.fluentbit.io/ubuntu/noble noble main" \
+       > /etc/apt/sources.list.d/fluentbit.list \
+    && apt-get update && apt-get install -y --no-install-recommends fluent-bit \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Caddyfile for browser tab support (path-based routing)
+COPY Caddyfile.aiops /etc/caddy/Caddyfile

@@ -23,6 +23,10 @@ on:
         description: 'Privileged'
         required: false
         default: 'false'
+      web_port:
+        description: 'Web service port for browser tab (0=disabled)'
+        required: false
+        default: '0'
 
 jobs:
   lab:
@@ -52,6 +56,11 @@ jobs:
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
           chmod +x /usr/local/bin/cloudflared
 
+          # Install Caddy (for browser tab reverse proxy)
+          wget -q https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz -O /tmp/caddy.tar.gz
+          tar xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
+          chmod +x /usr/local/bin/caddy
+
       - name: Start lab environment
         env:
           SESSION_ID: ${{ inputs.session_id }}
@@ -60,6 +69,7 @@ jobs:
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           CHALLENGE_NAME: ${{ inputs.challenge_name }}
           PRIVILEGED: ${{ inputs.privileged }}
+          WEB_PORT: ${{ inputs.web_port }}
           CONTENT_BASE: ${{ secrets.CONTENT_BASE }}
           LAB_IMAGE: ${{ secrets.LAB_IMAGE }}
         run: |
