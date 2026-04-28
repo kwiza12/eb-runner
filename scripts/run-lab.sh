@@ -16,6 +16,7 @@ TTYD_PORT=7681
 ARTIFACTS_DIR="/tmp/lab-artifacts"
 TTYD_PID=""
 TUNNEL_PID=""
+SOCAT_PID=""
 K3S_STARTED="false"
 LAB_IMAGE="${LAB_IMAGE:?LAB_IMAGE is required}"
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.35.3-k3s1}"
@@ -71,6 +72,7 @@ cleanup() {
   docker network rm "$NETWORK_NAME" 2>/dev/null || true
   [ -n "$TTYD_PID" ] && kill "$TTYD_PID" 2>/dev/null || true
   [ -n "$CADDY_PID" ] && kill "$CADDY_PID" 2>/dev/null || true
+  [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   callback "workflow-complete" "{\"session_id\":\"${SESSION_ID}\"}"
   log "Cleanup done."
@@ -336,10 +338,6 @@ if needs_privileged; then
   log "Privileged mode"
   LAB_RUN_ARGS+=(--privileged)
 fi
-if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
-  LAB_RUN_ARGS+=(-p "${EXPOSED_WEB_PORT}:${WEB_PORT}")
-  log "Exposing web port ${WEB_PORT} -> host ${EXPOSED_WEB_PORT}"
-fi
 
 docker run -d "${LAB_RUN_ARGS[@]}" "$EFFECTIVE_IMAGE" sleep infinity
 
@@ -397,6 +395,14 @@ log "ttyd running (PID: ${TTYD_PID})"
 TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   log "Starting Caddy reverse proxy (web_port=${WEB_PORT})..."
+  # Start a socat forwarder: host port -> container port via docker exec
+  # This avoids Docker networking issues entirely
+  socat TCP-LISTEN:${EXPOSED_WEB_PORT},fork,reuseaddr \
+    EXEC:"docker exec -i ${CONTAINER_NAME} socat STDIO TCP\:localhost\:${WEB_PORT}" &
+  SOCAT_PID=$!
+  sleep 1
+  log "socat bridge running (PID: ${SOCAT_PID}) — host:${EXPOSED_WEB_PORT} -> container:${WEB_PORT}"
+
   CADDYFILE="/tmp/Caddyfile"
   cat > "$CADDYFILE" << CADDYEOF
 :${CADDY_PORT} {
@@ -408,14 +414,6 @@ if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   }
 }
 CADDYEOF
-  # Verify port mapping is working before starting Caddy
-  for i in $(seq 1 30); do
-    if curl -sf "http://localhost:${EXPOSED_WEB_PORT}/" > /dev/null 2>&1; then
-      log "Web service reachable on host port ${EXPOSED_WEB_PORT}"
-      break
-    fi
-    sleep 2
-  done
   caddy run --config "$CADDYFILE" > /tmp/caddy.log 2>&1 &
   CADDY_PID=$!
   sleep 1
