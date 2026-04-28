@@ -367,9 +367,15 @@ fi
 log "Starting ttyd on port ${TTYD_PORT}"
 THEME='{"background":"#000000","foreground":"#c7c7c7","cursor":"#2196F3","cursorAccent":"#000000","selectionBackground":"#2196F333","black":"#000000","red":"#c91b00","green":"#00c200","yellow":"#c7c400","blue":"#0225c7","magenta":"#c930c7","cyan":"#00c5c7","white":"#c7c7c7","brightBlack":"#686868","brightRed":"#ff6e67","brightGreen":"#5ffa68","brightYellow":"#fffc67","brightBlue":"#6871ff","brightMagenta":"#ff77ff","brightCyan":"#60fdff","brightWhite":"#ffffff"}'
 
+TTYD_BASE_PATH=""
+if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
+  TTYD_BASE_PATH="/terminal"
+fi
+
 ttyd \
   --port "$TTYD_PORT" \
   --writable \
+  ${TTYD_BASE_PATH:+--base-path "$TTYD_BASE_PATH"} \
   -t fontSize=17 \
   -t reconnect=0 \
   -t "theme=${THEME}" \
@@ -395,7 +401,7 @@ if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
       CADDYFILE="/tmp/Caddyfile"
       cat > "$CADDYFILE" << CADDYEOF
 :${CADDY_PORT} {
-  handle_path /terminal/* {
+  handle /terminal/* {
     reverse_proxy localhost:${TTYD_PORT}
   }
   handle {
