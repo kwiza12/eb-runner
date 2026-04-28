@@ -336,6 +336,10 @@ if needs_privileged; then
   log "Privileged mode"
   LAB_RUN_ARGS+=(--privileged)
 fi
+if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
+  LAB_RUN_ARGS+=(-p "${EXPOSED_WEB_PORT}:${WEB_PORT}")
+  log "Exposing web port ${WEB_PORT} -> host ${EXPOSED_WEB_PORT}"
+fi
 
 docker run -d "${LAB_RUN_ARGS[@]}" "$EFFECTIVE_IMAGE" sleep infinity
 
@@ -392,33 +396,35 @@ log "ttyd running (PID: ${TTYD_PID})"
 # --- 3b. Caddy reverse proxy (when web_port is set) ---
 TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
-  # Get container IP to proxy directly (avoids port mapping issues)
-    CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CONTAINER_NAME")
-    if [ -z "$CONTAINER_IP" ]; then
-      log "WARN: Could not get container IP, browser tab won't work"
-    else
-      log "Starting Caddy reverse proxy (web_port=${WEB_PORT}, container_ip=${CONTAINER_IP})..."
-      CADDYFILE="/tmp/Caddyfile"
-      cat > "$CADDYFILE" << CADDYEOF
+  log "Starting Caddy reverse proxy (web_port=${WEB_PORT})..."
+  CADDYFILE="/tmp/Caddyfile"
+  cat > "$CADDYFILE" << CADDYEOF
 :${CADDY_PORT} {
   handle /terminal/* {
     reverse_proxy localhost:${TTYD_PORT}
   }
   handle {
-    reverse_proxy ${CONTAINER_IP}:${WEB_PORT}
+    reverse_proxy localhost:${EXPOSED_WEB_PORT}
   }
 }
 CADDYEOF
-    caddy run --config "$CADDYFILE" > /tmp/caddy.log 2>&1 &
-    CADDY_PID=$!
-    sleep 1
-    if ! kill -0 "$CADDY_PID" 2>/dev/null; then
-      log "WARN: Caddy failed to start, falling back to direct ttyd tunnel"
-      cat /tmp/caddy.log
-    else
-      log "Caddy running (PID: ${CADDY_PID})"
-      TUNNEL_TARGET_PORT="$CADDY_PORT"
+  # Verify port mapping is working before starting Caddy
+  for i in $(seq 1 30); do
+    if curl -sf "http://localhost:${EXPOSED_WEB_PORT}/" > /dev/null 2>&1; then
+      log "Web service reachable on host port ${EXPOSED_WEB_PORT}"
+      break
     fi
+    sleep 2
+  done
+  caddy run --config "$CADDYFILE" > /tmp/caddy.log 2>&1 &
+  CADDY_PID=$!
+  sleep 1
+  if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+    log "WARN: Caddy failed to start, falling back to direct ttyd tunnel"
+    cat /tmp/caddy.log
+  else
+    log "Caddy running (PID: ${CADDY_PID})"
+    TUNNEL_TARGET_PORT="$CADDY_PORT"
   fi
 fi
 
