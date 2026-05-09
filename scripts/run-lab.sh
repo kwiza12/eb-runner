@@ -396,14 +396,17 @@ TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   log "Starting web service inside container on port ${WEB_PORT}..."
   # Start services based on what's available
-  # Configure Grafana to allow iframe embedding (X-Frame-Options)
+  # Configure Grafana to allow iframe embedding and anonymous access
   docker exec "$CONTAINER_NAME" bash -c "
     if [ -f /etc/grafana/grafana.ini ]; then
       sed -i 's/;allow_embedding = .*/allow_embedding = true/' /etc/grafana/grafana.ini
       sed -i 's/allow_embedding = false/allow_embedding = true/' /etc/grafana/grafana.ini
-      # Also add it if not present at all
       grep -q 'allow_embedding' /etc/grafana/grafana.ini || \
         sed -i '/\[security\]/a allow_embedding = true' /etc/grafana/grafana.ini
+      # Enable anonymous access (no login needed in iframe)
+      sed -i 's/;enabled = false/enabled = true/' /etc/grafana/grafana.ini
+      sed -i '/\[auth.anonymous\]/,/^\[/ s/;org_role = .*/org_role = Admin/' /etc/grafana/grafana.ini
+      sed -i '/\[auth.anonymous\]/,/^\[/ s/org_role = Viewer/org_role = Admin/' /etc/grafana/grafana.ini
     fi
   " || true
 
