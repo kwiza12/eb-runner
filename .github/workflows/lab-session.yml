@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq curl wget
+          sudo apt-get install -y -qq jq curl wget socat
 
           # Install ttyd via snap (more reliable than binary download)
           sudo snap install ttyd --classic || {
