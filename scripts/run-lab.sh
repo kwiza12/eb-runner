@@ -395,8 +395,18 @@ log "ttyd running (PID: ${TTYD_PID})"
 TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
   log "Starting web service inside container on port ${WEB_PORT}..."
-  # Start Grafana/Prometheus inside the container in detached mode
-  # (setup.sh processes die when docker exec ends, so we restart them here)
+  # Start services based on what's available
+  # Configure Grafana to allow iframe embedding (X-Frame-Options)
+  docker exec "$CONTAINER_NAME" bash -c "
+    if [ -f /etc/grafana/grafana.ini ]; then
+      sed -i 's/;allow_embedding = .*/allow_embedding = true/' /etc/grafana/grafana.ini
+      sed -i 's/allow_embedding = false/allow_embedding = true/' /etc/grafana/grafana.ini
+      # Also add it if not present at all
+      grep -q 'allow_embedding' /etc/grafana/grafana.ini || \
+        sed -i '/\[security\]/a allow_embedding = true' /etc/grafana/grafana.ini
+    fi
+  " || true
+
   docker exec -d "$CONTAINER_NAME" bash -c "
     # Start services based on what's available
     if command -v grafana-server >/dev/null 2>&1; then
