@@ -394,14 +394,39 @@ log "ttyd running (PID: ${TTYD_PID})"
 # --- 3b. Caddy reverse proxy (when web_port is set) ---
 TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
-  log "Starting Caddy reverse proxy (web_port=${WEB_PORT})..."
-  # Start a socat forwarder: host port -> container port via docker exec
-  # This avoids Docker networking issues entirely
+  log "Starting web service inside container on port ${WEB_PORT}..."
+  # Start Grafana/Prometheus inside the container in detached mode
+  # (setup.sh processes die when docker exec ends, so we restart them here)
+  docker exec -d "$CONTAINER_NAME" bash -c "
+    # Start services based on what's available
+    if command -v grafana-server >/dev/null 2>&1; then
+      grafana-server --homepath=/usr/share/grafana --config=/etc/grafana/grafana.ini &
+    fi
+    if command -v prometheus >/dev/null 2>&1 && [ -f /etc/prometheus/prometheus.yml ]; then
+      prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prometheus &
+    fi
+    if command -v node_exporter >/dev/null 2>&1; then
+      node_exporter &
+    fi
+    # Keep this exec session alive so children survive
+    sleep infinity
+  "
+
+  # Wait for web service to be ready
+  for i in $(seq 1 30); do
+    if docker exec "$CONTAINER_NAME" curl -sf "http://localhost:${WEB_PORT}/" > /dev/null 2>&1; then
+      log "Web service ready on container port ${WEB_PORT}"
+      break
+    fi
+    sleep 2
+  done
+
+  log "Starting Caddy reverse proxy..."
+  # socat bridge: host port -> container port via docker exec
   socat TCP-LISTEN:${EXPOSED_WEB_PORT},fork,reuseaddr \
     EXEC:"docker exec -i ${CONTAINER_NAME} socat STDIO TCP\:localhost\:${WEB_PORT}" &
   SOCAT_PID=$!
   sleep 1
-  log "socat bridge running (PID: ${SOCAT_PID}) — host:${EXPOSED_WEB_PORT} -> container:${WEB_PORT}"
 
   CADDYFILE="/tmp/Caddyfile"
   cat > "$CADDYFILE" << CADDYEOF
