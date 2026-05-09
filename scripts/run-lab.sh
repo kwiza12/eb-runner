@@ -394,9 +394,9 @@ log "ttyd running (PID: ${TTYD_PID})"
 # --- 3b. Caddy reverse proxy (when web_port is set) ---
 TUNNEL_TARGET_PORT="$TTYD_PORT"
 if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
-  log "Starting web service inside container on port ${WEB_PORT}..."
-  # Start services based on what's available
-  # Configure Grafana to allow iframe embedding and anonymous access
+  log "Configuring web services for port ${WEB_PORT}..."
+
+  # Configure Grafana for iframe embedding and anonymous access
   docker exec "$CONTAINER_NAME" bash -c "
     if [ -f /etc/grafana/grafana.ini ]; then
       sed -i 's/;allow_embedding = .*/allow_embedding = true/' /etc/grafana/grafana.ini
@@ -410,32 +410,26 @@ if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
     fi
   " || true
 
-  docker exec -d "$CONTAINER_NAME" bash -c "
-    # Start services based on what's available
-    if command -v grafana-server >/dev/null 2>&1; then
-      grafana-server --homepath=/usr/share/grafana --config=/etc/grafana/grafana.ini &
-    fi
-    if command -v prometheus >/dev/null 2>&1 && [ -f /etc/prometheus/prometheus.yml ]; then
-      prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prometheus &
-    fi
-    if command -v node_exporter >/dev/null 2>&1; then
-      node_exporter &
-    fi
-    # Keep this exec session alive so children survive
-    sleep infinity
-  "
+  # Create default prometheus config (setup.sh may override later)
+  docker exec "$CONTAINER_NAME" bash -c "
+    mkdir -p /etc/prometheus
+    cat > /etc/prometheus/prometheus.yml << 'PROMEOF'
+global:
+  scrape_interval: 10s
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: node
+    static_configs:
+      - targets: ['localhost:9100']
+PROMEOF
+    chown -R ${CONTAINER_USER}:${CONTAINER_USER} /etc/prometheus
+  " || true
 
-  # Wait for web service to be ready
-  for i in $(seq 1 30); do
-    if docker exec "$CONTAINER_NAME" curl -sf "http://localhost:${WEB_PORT}/" > /dev/null 2>&1; then
-      log "Web service ready on container port ${WEB_PORT}"
-      break
-    fi
-    sleep 2
-  done
+  # Note: services are started AFTER setup.sh runs (see below)
 
-  log "Starting Caddy reverse proxy..."
-  # socat bridge: host port -> container port via docker exec
+  log "Starting socat bridge and Caddy..."
   socat TCP-LISTEN:${EXPOSED_WEB_PORT},fork,reuseaddr \
     EXEC:"docker exec -i ${CONTAINER_NAME} socat STDIO TCP\:localhost\:${WEB_PORT}" &
   SOCAT_PID=$!
@@ -523,6 +517,31 @@ fi
 if [ -n "$APPLY_BG_PID" ]; then
   log "Waiting for apply..."
   wait "$APPLY_BG_PID" 2>/dev/null || true
+fi
+
+# --- 7b. Start web services after setup completes (they need configs from setup.sh) ---
+if [ "$WEB_PORT" != "0" ] && [ -n "$WEB_PORT" ]; then
+  log "Starting web services inside container..."
+  docker exec -d "$CONTAINER_NAME" bash -c "
+    if command -v node_exporter >/dev/null 2>&1; then
+      node_exporter &
+    fi
+    if command -v prometheus >/dev/null 2>&1 && [ -f /etc/prometheus/prometheus.yml ]; then
+      prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prometheus &
+    fi
+    if command -v grafana-server >/dev/null 2>&1; then
+      grafana-server --homepath=/usr/share/grafana --config=/etc/grafana/grafana.ini &
+    fi
+    sleep infinity
+  "
+  # Wait for web service to be ready
+  for i in $(seq 1 30); do
+    if docker exec "$CONTAINER_NAME" curl -sf "http://localhost:${WEB_PORT}/" > /dev/null 2>&1; then
+      log "Web service ready on container port ${WEB_PORT}"
+      break
+    fi
+    sleep 2
+  done
 fi
 
 # --- 8. Ready ---
